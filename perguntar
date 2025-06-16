@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# ------------ INÍCIO -------------
+set -euo pipefail
+
+# Cores
+YELLOW="\033[1;33m"
+GREEN="\033[0;32m"
+RED="\033[0;31m"
+RESET="\033[0m"
+
+# profundeza de chamadas automáticas (para evitar loops infinitos)
+DEPTH=${DEPTH:-0}
+
+AUTO_YES=0
+if [[ ${1-} == "-y" || ${1-} == "--yes" ]]; then
+  AUTO_YES=1
+  shift
+fi
+
+if [[ $# -eq 0 ]]; then
+  echo "Uso: perguntar [-y|--yes] \"sua pergunta\"" >&2
+  exit 1
+fi
+
+SENTINEL="4223a%"
+INSTRUCTIONS="Você está interagindo com um agente que pode executar comandos de shell archLinux.\n\nRegras obrigatórias:\n1. Coloque APENAS comandos shell dentro de um bloco markdown \`\`\`bash ... \`\`\`.\n2. Cada linha deve ser um comando completo e independente; não coloque texto puro que não seja executável.\n3. Cada comando deve caber **em uma única linha**. Para gerar arquivos multi-linha, preferir:\n   • printf + \\n (ex: printf '%s\\n' linha1 linha2 > arquivo)\n   • bash -c \"printf '%s\\n' ... > arquivo && outro_cmd\"\n   • Vários echo separados (echo 'l1' > arq; echo 'l2' >> arq).\n   NÃO use echo com quebras \\n internas nem HEREDOC; serão rejeitados.\n4. Nunca inclua comentários ou explicações fora do bloco bash.\n5. Um único bloco bash por resposta.\n6.\n\nCICLO DE EXECUÇÃO:\n• Depois que eu enviar a SAÍDA dos comandos, explique o que significam os resultados.\n• Se precisar de novos comandos, finalize sua próxima resposta com **${SENTINEL}** sozinho na última linha.\n• Se estiver tudo resolvido, finalize com **FIM** na última linha.\n"
+
+# Arquivo de histórico (contexto por terminal) ------------------------------
+HISTORY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
+mkdir -p "$HISTORY_DIR"
+SESSION_ID="${PERGUNTAR_SESSION_ID:-$PPID}"
+export PERGUNTAR_SESSION_ID="$SESSION_ID"
+TTY_ID=$(tty | tr '/.' '_')
+HISTORY_FILE="$HISTORY_DIR/perguntar_history_${SESSION_ID}_${TTY_ID}"
+
+CONTEXT="$(tail -c 8000 "$HISTORY_FILE" 2>/dev/null || true)"
+CURRENT_DIR="$(pwd)"
+PROMPT="$CONTEXT\n\n$INSTRUCTIONS\n\nDiretório atual: $CURRENT_DIR\n\nUsuário: $*\n\n(Deseja continuar após ver a saída? Se precisar de mais ações, termine sua próxima resposta com ${SENTINEL}; caso contrário escreva FIM)"
+
+if [[ -z "${GEMINI_API_KEY-}" ]]; then
+  echo "Erro: variável GEMINI_API_KEY não definida." >&2
+  exit 1
+fi
+
+JSON=$(jq -n --arg prompt "$PROMPT" '{contents:[{parts:[{text:$prompt}]}]}')
+MODEL="gemini-2.0-flash"
+call_api() {
+  curl -s -H "Content-Type: application/json" \
+    -X POST -d "$JSON" \
+    "https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}"
+}
+RESPONSE=$(call_api)
+TEXT=$(echo "$RESPONSE" | jq -r 'try .candidates[0].content.parts[0].text catch ""')
+if [[ -z "$TEXT" || "$TEXT" == "null" ]]; then
+  ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Resposta vazia da API."')
+  echo -e "\n\033[0;31mErro da API: $ERROR_MSG\033[0m" >&2
+  exit 1
+fi
+
+echo -e "\n\033[1;36mArchvarius:\033[0m"
+echo "$TEXT" | sed '/^```.*$/d' | sed 's/\\n/\n/g'
+echo "----------------------------------------"
+
+CMDS=$(echo "$TEXT" | awk '/```bash/ {inblock=1; next} /```/ && inblock {inblock=0} inblock {print}')
+if [[ -z "$CMDS" ]]; then
+  exit 0
+fi
+
+echo -e "${YELLOW}Comandos:${RESET}"
+mapfile -t COMMANDS <<< "$CMDS"
+OUTPUT_LOG=""
+for i in "${!COMMANDS[@]}"; do
+  idx=$((i+1))
+  echo " $idx) ${COMMANDS[$i]}"
+done
+RUN_ALL=0
+for cmd in "${COMMANDS[@]}"; do
+  echo
+  if [[ $AUTO_YES -eq 1 || $RUN_ALL -eq 1 ]]; then
+    echo -e "${GREEN}Executando:${RESET} $cmd"
+    set +e
+    OUTPUT=$(bash -c "$cmd" 2>&1 | tee /dev/tty)
+    STATUS=$?
+    set -e
+    echo -e "${YELLOW}--- saída fim (status=$STATUS) ---${RESET}"
+    OUTPUT_LOG+=$'\n'$cmd$'\n'$OUTPUT$'\n'
+    echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n 200)\n" >> "$HISTORY_FILE"
+    continue
+  fi
+  read -rp "Executar comando '$cmd'? [s/N/t] " resp
+  case "$resp" in
+    s|S)
+      echo -e "${GREEN}Executando:${RESET} $cmd"
+      set +e
+      OUTPUT=$(bash -c "$cmd" 2>&1 | tee /dev/tty)
+      STATUS=$?
+      set -e
+      echo -e "${YELLOW}--- saída fim (status=$STATUS) ---${RESET}"
+      OUTPUT_LOG+=$'\n'$cmd$'\n'$OUTPUT$'\n'
+      echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n 200)\n" >> "$HISTORY_FILE"
+      ;;
+    t|T)
+      RUN_ALL=1
+      echo -e "${GREEN}Executando:${RESET} $cmd (e todos os próximos)"
+      set +e
+      OUTPUT=$(bash -c "$cmd" 2>&1 | tee /dev/tty)
+      STATUS=$?
+      set -e
+      echo -e "${YELLOW}--- saída fim (status=$STATUS) ---${RESET}"
+      OUTPUT_LOG+=$'\n'$cmd$'\n'$OUTPUT$'\n'
+      echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n 200)\n" >> "$HISTORY_FILE"
+      ;;
+    *)
+      echo -e "${RED}Ignorado:${RESET} $cmd" ;;
+  esac
+done
+
+echo -e "Pergunta: $*\nResposta:\n$TEXT\n" >> "$HISTORY_FILE"
+last_line=$(echo "$TEXT" | awk 'NF{l=$0} END{print l}')
+trimmed_last=$(echo "$last_line" | xargs)
+if [[ "$trimmed_last" == "$SENTINEL" ]]; then
+  if [[ -n "$OUTPUT_LOG" ]]; then
+    export DEPTH=$((DEPTH+1))
+    NEXT_INPUT="Saída dos comandos anteriores:\n$OUTPUT_LOG\n\nExplique os resultados para o usuário. Se precisar executar mais comandos, finalize com ${SENTINEL}; se tudo resolvido, escreva FIM."
+    NEXT_FLAG=""
+    if [[ $AUTO_YES -eq 1 ]]; then NEXT_FLAG="-y"; fi
+    "$0" $NEXT_FLAG "$NEXT_INPUT"
+  else
+    echo -e "${YELLOW}Nada a relatar para continuar.${RESET}"
+  fi
+fi
+# ------------- FIM -------------- 
