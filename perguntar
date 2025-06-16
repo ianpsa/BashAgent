@@ -57,7 +57,7 @@ if [[ -z "$TEXT" || "$TEXT" == "null" ]]; then
   exit 1
 fi
 
-echo -e "\n\033[1;36mArchvarius:\033[0m"
+echo -e "\n\033[1;36mBashAgent:\033[0m"
 echo "$TEXT" | sed '/^```.*$/d' | sed 's/\\n/\n/g'
 echo "----------------------------------------"
 

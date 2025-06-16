@@ -79,6 +79,14 @@ install -m 755 perguntar "$TARGET_DIR"
 # Criar alias/symlink "pgt" para o script principal
 ln -sf "$TARGET_DIR/perguntar" "$TARGET_DIR/pgt"
 
+# --- Detectar distribuição para contexto ---
+read -rp "Qual é a sua distribuição Linux (ex: Arch, Ubuntu, Fedora)? " DISTRO_NAME
+# Substituir a string 'archLinux' no script pelo nome informado
+if [[ -n "$DISTRO_NAME" ]]; then
+  ESCAPED="${DISTRO_NAME//\//\\}"
+  sed -i "s/archLinux/$ESCAPED/g" "$TARGET_DIR/perguntar"
+fi
+
 # Adicionar ao PATH se necessário
 if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
   SHELL_RC=""
