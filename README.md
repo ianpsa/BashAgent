@@ -96,7 +96,7 @@ rm ~/.local/bin/pgt ~/.local/bin/perguntar
 ---
 ## Requisitos
 
-* Dependências: Bash e Python (só pra mostrar os visuals do instalador :p)
+* Dependências: Bash, jq e Python (só pra mostrar os visuals do instalador :p)
 * Variável `GEMINI_API_KEY` exportada (o instalador ajuda a configurar)
 
 ---
