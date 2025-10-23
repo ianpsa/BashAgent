@@ -12,13 +12,30 @@ RESET="\033[0m"
 DEPTH=${DEPTH:-0}
 
 AUTO_YES=0
-if [[ ${1-} == "-y" || ${1-} == "--yes" ]]; then
-  AUTO_YES=1
-  shift
-fi
+LOOP_MODE=0
+while [[ $# -gt 0 ]]; do
+  case "${1-}" in
+    -y|--yes)
+      AUTO_YES=1
+      shift
+      ;;
+    -l|--loop)
+      LOOP_MODE=1
+      AUTO_YES=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 if [[ $# -eq 0 ]]; then
-  echo "Uso: perguntar [-y|--yes] \"sua pergunta\"" >&2
+  echo "Uso: perguntar [-y|--yes] [-l|--loop] \"sua pergunta\"" >&2
   exit 1
 fi
 
@@ -30,7 +47,7 @@ ORG_NAME="BashAgent"
 ENV_LINE="Ambiente: OS=${OS_NAME} (Linux ${OS_KERNEL}), Organização=${ORG_NAME}"
 
 # Instruções para o modelo (mensagem de sistema)
-INSTRUCTIONS="Você é um agente capaz de planejar e executar comandos de shell no ${OS_NAME}, pertencente à organização ${ORG_NAME}.\n\nO QUE SEMPRE DIZER NO TOPO:\n- Na primeira linha da resposta, escreva exatamente: ${ENV_LINE}\n\nFORMATO DE SAÍDA (OBRIGATÓRIO):\n- Para cada comando que precise ser executado, gere um bloco único delimitado por tags XML assim:\n  <COMMAND os=\"${OS_NAME}\" org=\"${ORG_NAME}\">\n  COMANDO_AQUI\n  </COMMAND>\n- Dentro de <COMMAND>...</COMMAND> deve haver APENAS o comando shell (sem comentários inline, prefixos como '$' ou texto explicativo).\n- Você PODE usar quebras de linha internas no comando; o aplicativo executará tudo entre as tags como uma única unidade no zsh/bash.\n- Evite aspas curvas e caracteres unicode especiais em flags/operadores; use apenas ASCII simples (\" ' - --).\n- Se precisar criar conteúdo multi-linha em arquivos, prefira padrões robustos como:\n  • printf '%s\\n' ... > arquivo\n  • printf '...\n...' > arquivo\n  • Sequência de comandos com &&, evitando depender de quebras de linha significativas.\n- NÃO use cercas de código markdown (\`\`\`bash ...).\n- O aplicativo pedirá confirmação antes de executar; cada bloco <COMMAND> é executado como uma unidade.\n- Você PODE enviar múltiplos blocos <COMMAND> em uma única resposta; serão executados em ordem.\n- Se o próximo passo depender da SAÍDA gerada, envie apenas os comandos da etapa atual e finalize sua resposta com ${SENTINEL} para que a saída seja retroalimentada.\n- É OBRIGATÓRIO: se houver qualquer ação a executar, inclua ao menos um bloco <COMMAND>; nunca finalize com ${SENTINEL} sem fornecer comandos.\n\nCICLO DE EXECUÇÃO:\n- Após eu enviar a SAÍDA do que foi executado, explique sucintamente os resultados para o usuário.\n- Se forem necessários novos comandos, finalize sua próxima resposta com ${SENTINEL} sozinho na ÚLTIMA linha.\n- Se tudo estiver concluído, finalize com FIM na ÚLTIMA linha.\n- NUNCA finalize com ${SENTINEL} sem incluir ao menos um <COMMAND> correspondente às suas instruções.\n\nREGRAS DE QUALIDADE:\n- Os comandos devem ser idempotentes quando possível, seguros por padrão e explicados fora das tags <COMMAND>.\n- Pressuponha shell compatível com bash/zsh no ${OS_NAME}.\n- Produza no máximo os comandos estritamente necessários."
+INSTRUCTIONS="Você é um agente capaz de planejar e executar comandos de shell no ${OS_NAME}, pertencente à organização ${ORG_NAME}.\n\nO QUE SEMPRE DIZER NO TOPO:\n- Na primeira linha da resposta, escreva exatamente: ${ENV_LINE}\n\nFORMATO DE SAÍDA (OBRIGATÓRIO):\n- Para cada comando que precise ser executado, gere um bloco único delimitado por tags XML assim:\n  <COMMAND os=\"${OS_NAME}\" org=\"${ORG_NAME}\">\n  COMANDO_AQUI\n  </COMMAND>\n- Dentro de <COMMAND>...</COMMAND> deve haver APENAS o comando shell (sem comentários inline, prefixos como '$' ou texto explicativo).\n- Você PODE usar quebras de linha internas no comando; o aplicativo executará tudo entre as tags como uma única unidade no zsh/bash.\n- Evite aspas curvas e caracteres unicode especiais em flags/operadores; use apenas ASCII simples (\" ' - --).\n- Se precisar criar conteúdo multi-linha em arquivos, prefira padrões robustos como:\n  • printf '%s\\n' ... > arquivo\n  • printf '...\n...' > arquivo\n  • Sequência de comandos com &&, evitando depender de quebras de linha significativas.\n- NÃO use cercas de código markdown (\`\`\`bash ...).\n- O aplicativo pedirá confirmação antes de executar; cada bloco <COMMAND> é executado como uma unidade.\n- Você PODE enviar múltiplos blocos <COMMAND> em uma única resposta; serão executados em ordem.\n- Se o próximo passo depender da SAÍDA gerada, envie apenas os comandos da etapa atual e finalize sua resposta com ${SENTINEL} para que a saída seja retroalimentada.\n- Em modo contínuo, a retroalimentação ocorre automaticamente até o modelo escrever FIM.\n- É OBRIGATÓRIO: se houver qualquer ação a executar, inclua ao menos um bloco <COMMAND>; nunca finalize com ${SENTINEL} sem fornecer comandos.\n\nCICLO DE EXECUÇÃO:\n- Após eu enviar a SAÍDA do que foi executado, explique sucintamente os resultados para o usuário.\n- Se forem necessários novos comandos, finalize sua próxima resposta com ${SENTINEL} sozinho na ÚLTIMA linha.\n- Se tudo estiver concluído, finalize com FIM na ÚLTIMA linha.\n- NUNCA finalize com ${SENTINEL} sem incluir ao menos um <COMMAND> correspondente às suas instruções.\n\nREGRAS DE QUALIDADE:\n- Os comandos devem ser idempotentes quando possível, seguros por padrão e explicados fora das tags <COMMAND>.\n- Pressuponha shell compatível com bash/zsh no ${OS_NAME}.\n- Produza no máximo os comandos estritamente necessários."
 
 # Arquivo de histórico (contexto por terminal) ------------------------------
 HISTORY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
