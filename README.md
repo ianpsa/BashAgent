@@ -55,12 +55,12 @@ cd pgt-installer
 
 O instalador copia **perguntar** e cria o alias **pgt** em `~/.local/bin`.
 
-Durante a instalação você verá duas perguntas:
+Durante a instalação você verá duas etapas:
 1. Confirmação para prosseguir (`Tem certeza que deseja instalar o BashAgent? [s/N]`).
-2.Entrada da chave Gemini (`Adicione aqui sua chave do gemini`). Caso informe a chave que você pode pegar aqui (https://ai.google.dev/gemini-api/docs/api-key?hl=pt-br), o instalador a gravará no seu `~/.bashrc`, `~/.zshrc` ou `~/.profile` no formato:
+2. Inserir sua chave do OpenRouter. Você pode obtê-la em `https://openrouter.ai/keys`. O instalador grava no seu `~/.bashrc`, `~/.zshrc` ou `~/.profile` no formato:
 
 ```bash
-export GEMINI_API_KEY="SUA_CHAVE_AQUI"
+export OPENROUTER_API_KEY="SUA_CHAVE_AQUI"
 ```
 
 Se deixar em branco, você poderá exportar manualmente depois.
@@ -77,15 +77,42 @@ perguntar "Como crio um virtualenv?"
 ```
 
 Opções:
-* `-y` / `--yes`  – executa todos os comandos retornados sem confirmar.
+- **-y / --yes**: executa todos os comandos retornados sem confirmar.
 
 Durante a execução, o script perguntará para cada comando:
 ```
-Executar comando 'cmd'? [s/N/t]
+Executar o comando N? [s/N/t]
 ```
-* `s` – executa somente este comando
-* `t` – executa este e todos os seguintes
-* Enter/qualquer tecla – ignora
+- **s**: executa somente este comando
+- **t**: executa este e todos os seguintes
+- Enter/qualquer tecla: ignora
+
+---
+## Como a IA retorna comandos
+
+- O modelo retorna comandos dentro de blocos XML:
+```text
+<COMMAND os="Arch Linux" org="BashAgent">
+COMANDO AQUI (pode ter múltiplas linhas)
+</COMMAND>
+```
+- O BashAgent executa o conteúdo completo do bloco como UMA unidade no zsh/bash.
+- A resposta também vem com uma primeira linha fixa indicando ambiente, ex.: `Ambiente: OS=Arch Linux (Linux x.y.z), Organização=BashAgent`.
+- Para encadear passos que dependem da saída anterior, o modelo finaliza com um sentinel especial (ex.: `4223a%`). O BashAgent captura a saída dos comandos e reenvia para a IA automaticamente, continuando o ciclo até o modelo escrever `FIM`.
+
+---
+## Variáveis de ambiente úteis
+
+- **OPENROUTER_API_KEY**: chave da API do OpenRouter (obrigatória).
+- **PERGUNTAR_CONTEXT_BYTES**: bytes do histórico enviados para o modelo (padrão: 64000).
+- **PERGUNTAR_HISTORY_OUTPUT_LINES**: se definido, limita quantas linhas de saída são gravadas no histórico por comando; se não definido, salva a saída completa.
+
+---
+## Requisitos
+
+- Dependências: `bash`, `curl`, `jq`, `perl`.
+- Conexão à internet (usa OpenRouter com o modelo `z-ai/glm-4.5-air:free`).
+
 ---
 ## Desinstalação
 
@@ -94,11 +121,4 @@ rm ~/.local/bin/pgt ~/.local/bin/perguntar
 ```
 
 ---
-## Requisitos
-
-* Dependências: Bash, jq e Python (só pra mostrar os visuals do instalador :p)
-* Variável `GEMINI_API_KEY` exportada (o instalador ajuda a configurar)
-
----
-
-> Por ser um modelinho de IA não me responsabilizo por qualquer comando incorreto que ele possa executar em sua máquina, Verifique antes de executar um comando!
+> Por ser um modelinho de IA não me responsabilizo por qualquer comando incorreto que ele possa executar em sua máquina. Verifique antes de executar um comando!.

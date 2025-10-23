@@ -23,7 +23,14 @@ if [[ $# -eq 0 ]]; then
 fi
 
 SENTINEL="4223a%"
-INSTRUCTIONS="Você está interagindo com um agente que pode executar comandos de shell archLinux.\n\nRegras obrigatórias:\n1. Coloque APENAS comandos shell dentro de um bloco markdown \`\`\`bash ... \`\`\`.\n2. Cada linha deve ser um comando completo e independente; não coloque texto puro que não seja executável.\n3. Cada comando deve caber **em uma única linha**. Para gerar arquivos multi-linha, preferir:\n   • printf + \\n (ex: printf '%s\\n' linha1 linha2 > arquivo)\n   • bash -c \"printf '%s\\n' ... > arquivo && outro_cmd\"\n   • Vários echo separados (echo 'l1' > arq; echo 'l2' >> arq).\n   NÃO use echo com quebras \\n internas nem HEREDOC; serão rejeitados.\n4. Nunca inclua comentários ou explicações fora do bloco bash.\n5. Um único bloco bash por resposta.\n6.\n\nCICLO DE EXECUÇÃO:\n• Depois que eu enviar a SAÍDA dos comandos, explique o que significam os resultados.\n• Se precisar de novos comandos, finalize sua próxima resposta com **${SENTINEL}** sozinho na última linha.\n• Se estiver tudo resolvido, finalize com **FIM** na última linha.\n"
+# Metadados do ambiente para o modelo
+OS_KERNEL="$(uname -r)"
+OS_NAME="Arch Linux"
+ORG_NAME="BashAgent"
+ENV_LINE="Ambiente: OS=${OS_NAME} (Linux ${OS_KERNEL}), Organização=${ORG_NAME}"
+
+# Instruções para o modelo (mensagem de sistema)
+INSTRUCTIONS="Você é um agente capaz de planejar e executar comandos de shell no ${OS_NAME}, pertencente à organização ${ORG_NAME}.\n\nO QUE SEMPRE DIZER NO TOPO:\n- Na primeira linha da resposta, escreva exatamente: ${ENV_LINE}\n\nFORMATO DE SAÍDA (OBRIGATÓRIO):\n- Para cada comando que precise ser executado, gere um bloco único delimitado por tags XML assim:\n  <COMMAND os=\"${OS_NAME}\" org=\"${ORG_NAME}\">\n  COMANDO_AQUI\n  </COMMAND>\n- Dentro de <COMMAND>...</COMMAND> deve haver APENAS o comando shell (sem comentários inline, prefixos como '$' ou texto explicativo).\n- Você PODE usar quebras de linha internas no comando; o aplicativo executará tudo entre as tags como uma única unidade no zsh/bash.\n- Evite aspas curvas e caracteres unicode especiais em flags/operadores; use apenas ASCII simples (\" ' - --).\n- Se precisar criar conteúdo multi-linha em arquivos, prefira padrões robustos como:\n  • printf '%s\\n' ... > arquivo\n  • printf '...\n...' > arquivo\n  • Sequência de comandos com &&, evitando depender de quebras de linha significativas.\n- NÃO use cercas de código markdown (\`\`\`bash ...).\n- O aplicativo pedirá confirmação antes de executar; cada bloco <COMMAND> é executado como uma unidade.\n- Você PODE enviar múltiplos blocos <COMMAND> em uma única resposta; serão executados em ordem.\n- Se o próximo passo depender da SAÍDA gerada, envie apenas os comandos da etapa atual e finalize sua resposta com ${SENTINEL} para que a saída seja retroalimentada.\n- É OBRIGATÓRIO: se houver qualquer ação a executar, inclua ao menos um bloco <COMMAND>; nunca finalize com ${SENTINEL} sem fornecer comandos.\n\nCICLO DE EXECUÇÃO:\n- Após eu enviar a SAÍDA do que foi executado, explique sucintamente os resultados para o usuário.\n- Se forem necessários novos comandos, finalize sua próxima resposta com ${SENTINEL} sozinho na ÚLTIMA linha.\n- Se tudo estiver concluído, finalize com FIM na ÚLTIMA linha.\n- NUNCA finalize com ${SENTINEL} sem incluir ao menos um <COMMAND> correspondente às suas instruções.\n\nREGRAS DE QUALIDADE:\n- Os comandos devem ser idempotentes quando possível, seguros por padrão e explicados fora das tags <COMMAND>.\n- Pressuponha shell compatível com bash/zsh no ${OS_NAME}.\n- Produza no máximo os comandos estritamente necessários."
 
 # Arquivo de histórico (contexto por terminal) ------------------------------
 HISTORY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
@@ -33,85 +40,163 @@ export PERGUNTAR_SESSION_ID="$SESSION_ID"
 TTY_ID=$(tty | tr '/.' '_')
 HISTORY_FILE="$HISTORY_DIR/perguntar_history_${SESSION_ID}_${TTY_ID}"
 
-CONTEXT="$(tail -c 8000 "$HISTORY_FILE" 2>/dev/null || true)"
+CONTEXT_BYTES="${PERGUNTAR_CONTEXT_BYTES:-64000}"
+CONTEXT="$(tail -c "$CONTEXT_BYTES" "$HISTORY_FILE" 2>/dev/null || true)"
 CURRENT_DIR="$(pwd)"
-PROMPT="$CONTEXT\n\n$INSTRUCTIONS\n\nDiretório atual: $CURRENT_DIR\n\nUsuário: $*\n\n(Deseja continuar após ver a saída? Se precisar de mais ações, termine sua próxima resposta com ${SENTINEL}; caso contrário escreva FIM)"
+PROMPT="$CONTEXT\n\nDiretório atual: $CURRENT_DIR\n\nUsuário: $*\n\n(Deseja continuar após ver a saída? Se precisar de mais ações, termine sua próxima resposta com ${SENTINEL}; caso contrário escreva FIM)"
 
-if [[ -z "${GEMINI_API_KEY-}" ]]; then
-  echo "Erro: variável GEMINI_API_KEY não definida." >&2
+if [[ -z "${OPENROUTER_API_KEY-}" ]]; then
+  echo "Erro: variável OPENROUTER_API_KEY não definida." >&2
   exit 1
 fi
 
-JSON=$(jq -n --arg prompt "$PROMPT" '{contents:[{parts:[{text:$prompt}]}]}')
-MODEL="gemini-2.0-flash"
+MODEL="z-ai/glm-4.5-air:free"
+API_URL="https://openrouter.ai/api/v1/chat/completions"
+JSON=$(jq -n \
+  --arg model "$MODEL" \
+  --arg sys "$INSTRUCTIONS" \
+  --arg user "$PROMPT" \
+  '{model:$model, messages:[{role:"system", content:$sys}, {role:"user", content:$user}], temperature:0.2}')
 call_api() {
-  curl -s -H "Content-Type: application/json" \
+  curl -sS -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
     -X POST -d "$JSON" \
-    "https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}"
+    "$API_URL"
 }
 RESPONSE=$(call_api)
-TEXT=$(echo "$RESPONSE" | jq -r 'try .candidates[0].content.parts[0].text catch ""')
+TEXT=$(echo "$RESPONSE" | jq -r 'try .choices[0].message.content catch ""')
 if [[ -z "$TEXT" || "$TEXT" == "null" ]]; then
-  ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Resposta vazia da API."')
+  ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // .message // "Resposta vazia da API."')
   echo -e "\n\033[0;31mErro da API: $ERROR_MSG\033[0m" >&2
   exit 1
 fi
 
 echo -e "\n\033[1;36mBashAgent:\033[0m"
-echo "$TEXT" | sed '/^```.*$/d' | sed 's/\\n/\n/g'
+# Exibe apenas a parte explicativa, removendo blocos de comandos e cercas markdown
+echo "$TEXT" \
+  | sed '/^```.*$/d' \
+  | perl -0777 -pe 's#<COMMAND[^>]*>[\s\S]*?</COMMAND>##g' \
+  | sed 's/\\n/\n/g'
 echo "----------------------------------------"
 
-CMDS=$(echo "$TEXT" | awk '/```bash/ {inblock=1; next} /```/ && inblock {inblock=0} inblock {print}')
-if [[ -z "$CMDS" ]]; then
+# Função de sanitização para comandos (unicode -> ASCII, remoção de chars invisíveis e CR)
+sanitize_command() {
+  local raw="$1"
+  # Remove CR e BOM/zero-width
+  local s
+  s=$(printf '%s' "$raw" \
+    | tr -d '\r' \
+    | perl -CSDA -pe 's/\x{FEFF}//g; s/[\x{200B}\x{200C}\x{200D}]//g; s/\x{00AD}//g; s/\x{00A0}/ /g; s/\x{202F}/ /g;' \
+    | perl -CSDA -pe 'tr/\x{2018}\x{2019}\x{201B}\x{201A}\x{FF07}/\x27/; tr/\x{201C}\x{201D}\x{201E}\x{201F}\x{FF02}/\x22/; tr/\x{2010}\x{2011}\x{2012}\x{2013}\x{2014}\x{2015}/-/'
+  )
+  # Trim espaços em torno, preservando quebras internas
+  # shellcheck disable=SC2001
+  s=$(printf '%s' "$s" | sed '1{/^[[:space:]]*$/d};$!b;$s/^[[:space:]]*//;s/[[:space:]]*$//')
+  printf '%s' "$s"
+}
+
+# Extrai blocos <COMMAND>...</COMMAND>
+RAW_MARKED=$(printf '%s' "$TEXT" | perl -0777 -ne 'while (m#<COMMAND[^>]*>([\s\S]*?)</COMMAND>#g){print "__CMD_START__\n$1\n__CMD_END__\n"}')
+
+declare -a RAW_COMMANDS=()
+buf=""
+inb=0
+while IFS= read -r line; do
+  if [[ "$line" == "__CMD_START__" ]]; then
+    inb=1
+    buf=""
+    continue
+  fi
+  if [[ "$line" == "__CMD_END__" ]]; then
+    RAW_COMMANDS+=("$buf")
+    inb=0
+    buf=""
+    continue
+  fi
+  if [[ $inb -eq 1 ]]; then
+    if [[ -z "$buf" ]]; then buf="$line"; else buf+=$'\n'$line; fi
+  fi
+done <<< "$RAW_MARKED"
+
+declare -a COMMANDS=()
+for raw in "${RAW_COMMANDS[@]}"; do
+  cleaned=$(sanitize_command "$raw")
+  # Ignora comandos vazios após limpeza
+  if [[ -n "$cleaned" ]]; then
+    COMMANDS+=("$cleaned")
+  fi
+done
+
+if [[ ${#COMMANDS[@]} -eq 0 ]]; then
   exit 0
 fi
 
 echo -e "${YELLOW}Comandos:${RESET}"
-mapfile -t COMMANDS <<< "$CMDS"
 OUTPUT_LOG=""
 for i in "${!COMMANDS[@]}"; do
   idx=$((i+1))
-  echo " $idx) ${COMMANDS[$i]}"
+  cmd="${COMMANDS[$i]}"
+  first_line=$(echo "$cmd" | head -n 1)
+  total_lines=$(printf '%s' "$cmd" | awk 'END{print NR}')
+  if [[ $total_lines -gt 1 ]]; then
+    echo " $idx) ${first_line} ... (+$((total_lines-1)) linhas)"
+  else
+    echo " $idx) ${first_line}"
+  fi
 done
 RUN_ALL=0
-for cmd in "${COMMANDS[@]}"; do
+for i in "${!COMMANDS[@]}"; do
+  cmd="${COMMANDS[$i]}"
+  first_line=$(echo "$cmd" | head -n 1)
   echo
   if [[ $AUTO_YES -eq 1 || $RUN_ALL -eq 1 ]]; then
-    echo -e "${GREEN}Executando:${RESET} $cmd"
+    echo -e "${GREEN}Executando:${RESET} $first_line"
     set +e
     OUTPUT=$(bash -c "$cmd" 2>&1 | tee /dev/tty)
     STATUS=$?
     set -e
     echo -e "${YELLOW}--- saída fim (status=$STATUS) ---${RESET}"
     OUTPUT_LOG+=$'\n'$cmd$'\n'$OUTPUT$'\n'
-    echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n 200)\n" >> "$HISTORY_FILE"
+    if [[ -n "${PERGUNTAR_HISTORY_OUTPUT_LINES-}" ]]; then
+      echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n "${PERGUNTAR_HISTORY_OUTPUT_LINES}")\n" >> "$HISTORY_FILE"
+    else
+      echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$OUTPUT\n" >> "$HISTORY_FILE"
+    fi
     continue
   fi
-  read -rp "Executar comando '$cmd'? [s/N/t] " resp
+  read -rp "Executar o comando $((i+1))? [s/N/t] " resp
   case "$resp" in
     s|S)
-      echo -e "${GREEN}Executando:${RESET} $cmd"
+      echo -e "${GREEN}Executando:${RESET} $first_line"
       set +e
       OUTPUT=$(bash -c "$cmd" 2>&1 | tee /dev/tty)
       STATUS=$?
       set -e
       echo -e "${YELLOW}--- saída fim (status=$STATUS) ---${RESET}"
       OUTPUT_LOG+=$'\n'$cmd$'\n'$OUTPUT$'\n'
-      echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n 200)\n" >> "$HISTORY_FILE"
+      if [[ -n "${PERGUNTAR_HISTORY_OUTPUT_LINES-}" ]]; then
+        echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n "${PERGUNTAR_HISTORY_OUTPUT_LINES}")\n" >> "$HISTORY_FILE"
+      else
+        echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$OUTPUT\n" >> "$HISTORY_FILE"
+      fi
       ;;
     t|T)
       RUN_ALL=1
-      echo -e "${GREEN}Executando:${RESET} $cmd (e todos os próximos)"
+      echo -e "${GREEN}Executando:${RESET} $first_line (e todos os próximos)"
       set +e
       OUTPUT=$(bash -c "$cmd" 2>&1 | tee /dev/tty)
       STATUS=$?
       set -e
       echo -e "${YELLOW}--- saída fim (status=$STATUS) ---${RESET}"
       OUTPUT_LOG+=$'\n'$cmd$'\n'$OUTPUT$'\n'
-      echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n 200)\n" >> "$HISTORY_FILE"
+      if [[ -n "${PERGUNTAR_HISTORY_OUTPUT_LINES-}" ]]; then
+        echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$(echo "$OUTPUT" | head -n "${PERGUNTAR_HISTORY_OUTPUT_LINES}")\n" >> "$HISTORY_FILE"
+      else
+        echo -e "Comando executado: $cmd (status=$STATUS)\nSaída:\n$OUTPUT\n" >> "$HISTORY_FILE"
+      fi
       ;;
     *)
-      echo -e "${RED}Ignorado:${RESET} $cmd" ;;
+      echo -e "${RED}Ignorado:${RESET} $first_line" ;;
   esac
 done
 
@@ -126,7 +211,15 @@ if [[ "$trimmed_last" == "$SENTINEL" ]]; then
     if [[ $AUTO_YES -eq 1 ]]; then NEXT_FLAG="-y"; fi
     "$0" $NEXT_FLAG "$NEXT_INPUT"
   else
-    echo -e "${YELLOW}Nada a relatar para continuar.${RESET}"
+    if (( DEPTH < 3 )); then
+      export DEPTH=$((DEPTH+1))
+      NEXT_INPUT="Sua resposta anterior não continha nenhum bloco <COMMAND>. Reenvie incluindo os comandos encapsulados em <COMMAND os=\"${OS_NAME}\" org=\"${ORG_NAME}\">...<\/COMMAND>. Lembre-se: nunca finalize com ${SENTINEL} sem fornecer comandos."
+      NEXT_FLAG=""
+      if [[ $AUTO_YES -eq 1 ]]; then NEXT_FLAG="-y"; fi
+      "$0" $NEXT_FLAG "$NEXT_INPUT"
+    else
+      echo -e "${YELLOW}Nada a relatar para continuar.${RESET}"
+    fi
   fi
 fi
 # ------------- FIM -------------- 

@@ -79,14 +79,6 @@ install -m 755 perguntar "$TARGET_DIR"
 # Criar alias/symlink "pgt" para o script principal
 ln -sf "$TARGET_DIR/perguntar" "$TARGET_DIR/pgt"
 
-# --- Detectar distribuição para contexto ---
-read -rp "Qual é a sua distribuição Linux (ex: Arch, Ubuntu, Fedora)? " DISTRO_NAME
-# Substituir a string 'archLinux' no script pelo nome informado
-if [[ -n "$DISTRO_NAME" ]]; then
-  ESCAPED="${DISTRO_NAME//\//\\}"
-  sed -i "s/archLinux/$ESCAPED/g" "$TARGET_DIR/perguntar"
-fi
-
 # Adicionar ao PATH se necessário
 if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
   SHELL_RC=""
@@ -100,23 +92,33 @@ if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
   fi
 fi
 
-# --- Configurar GEMINI_API_KEY -------------------------------------------
-# Solicita sempre a chave Gemini, independentemente de já existir no ambiente
-read -rp "Adicione aqui sua chave do gemini (deixe em branco para pular): " G_KEY
-if [[ -n "$G_KEY" ]]; then
-  # Seleciona arquivo de configuração prioritário disponível
+# --- Configurar OPENROUTER_API_KEY ----------------------------------------
+read -rp "Adicione aqui sua chave do OpenRouter (https://openrouter.ai/keys) [deixe em branco para pular]: " OR_KEY
+if [[ -n "$OR_KEY" ]]; then
   SHELL_RC=""
   [[ -f "$HOME/.bashrc" ]] && SHELL_RC="$HOME/.bashrc"
   [[ -f "$HOME/.zshrc"  ]] && SHELL_RC="$HOME/.zshrc"
   [[ -z "$SHELL_RC" ]] && SHELL_RC="$HOME/.profile"
 
   # Remove definições anteriores para evitar duplicatas
-  sed -i '/export GEMINI_API_KEY=/d' "$SHELL_RC"
+  sed -i '/export OPENROUTER_API_KEY=/d' "$SHELL_RC"
 
-  echo "export GEMINI_API_KEY=\"$G_KEY\"" >> "$SHELL_RC"
+  echo "export OPENROUTER_API_KEY=\"$OR_KEY\"" >> "$SHELL_RC"
   echo "Chave adicionada em $SHELL_RC"
 else
-  echo "Você pode definir GEMINI_API_KEY manualmente depois em ~/.bashrc ou ~/.zshrc."
+  echo "Você pode definir OPENROUTER_API_KEY manualmente depois em ~/.bashrc ou ~/.zshrc."
+fi
+
+# Dicas de dependências
+MISSING=()
+for dep in curl jq perl; do
+  if ! command -v "$dep" >/dev/null 2>&1; then
+    MISSING+=("$dep")
+  fi
+done
+if (( ${#MISSING[@]} )); then
+  echo -e "\n${CYAN}Dependências ausentes:${RESET} ${MISSING[*]}"
+  echo "Instale-as pelo gerenciador da sua distro. Ex. Arch: sudo pacman -S --needed ${MISSING[*]}"
 fi
 
 echo "Concluído! Comandos instalados: pgt (atalho) e perguntar (script completo)."
